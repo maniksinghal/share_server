@@ -24,6 +24,9 @@ public class WorkerThread implements Runnable {
     private final int NETWORK_MSG_FILE_PUT_END = 7;
     private final int NETWORK_MSG_FILE_PUT_END_ACK = 8;
     private final int NETWORK_MSG_FILE_TRANSFER_CANCEL = 9;
+    private final int NETWORK_MSG_DIRECTORY_TIME_GET = 10;
+    private final int NETWORK_MSG_DIRECTORY_TIME_ACK = 11;
+    private final int NETWORK_MSG_DIRECTORY_TIME_SET = 12;
 
     // File download context
     private FileOutputStream fo = null;
@@ -117,6 +120,39 @@ public class WorkerThread implements Runnable {
             }
         }
 
+        if (msg_id == NETWORK_MSG_DIRECTORY_TIME_GET) {
+
+            bb = ByteBuffer.wrap(payload);
+            int file_len = bb.getInt();
+            byte[] file_name = new byte[file_len];
+            bb.get(file_name, 0, file_len);
+            String str = new String(file_name);
+
+            // Return value '2' for now
+            byte[] rsp = new byte[16];
+            bb = ByteBuffer.wrap(rsp);
+            bb.putInt(NETWORK_MSG_DIRECTORY_TIME_ACK);
+            bb.putInt(8);
+            bb.putLong(2);
+            System.out.println("Got Network_MSG_DIRECTORY_TIME_GET for " + str);
+            return rsp;
+        }
+
+        if (msg_id == NETWORK_MSG_DIRECTORY_TIME_SET) {
+
+            bb = ByteBuffer.wrap(payload);
+            int file_len = bb.getInt();
+            byte[] file_name = new byte[file_len];
+            bb.get(file_name, 0, file_len);
+            String str = new String(file_name);
+            System.out.println("Got Network_MSG_DIRECTORY_TIME_SET for " + str);
+
+            bb = ByteBuffer.wrap(response);
+            bb.putInt(NETWORK_MSG_DIRECTORY_TIME_ACK);
+            bb.putInt(0); // 0 payload length
+            return response;
+        }
+
         return null;
 
     }
@@ -156,6 +192,8 @@ public class WorkerThread implements Runnable {
                         case NETWORK_MSG_FILE_PUT_START:
                         case NETWORK_MSG_FILE_PUT_END:
                         case NETWORK_MSG_FILE_TRANSFER_CANCEL:
+                        case NETWORK_MSG_DIRECTORY_TIME_GET:
+                        case NETWORK_MSG_DIRECTORY_TIME_SET:
                             byte[] out_msg = handle_file_operations(msg_id, actual_len, data_bytes);
                             if (out_msg != null) {
                                 OutputStream out = sock.getOutputStream();
