@@ -6,11 +6,13 @@ import javax.xml.crypto.Data;
 import java.io.*;
 import java.net.Socket;
 import java.nio.file.Paths;
+import java.nio.file.attribute.FileTime;
+import java.util.HashMap;
 
 /**
  * Created by maniksin on 5/30/15.
  */
-public class WorkerThread implements Runnable {
+public class WorkerThread implements Runnable,Serializable {
     private Socket sock;
 
     // Messages exchanged with the peer
@@ -27,12 +29,54 @@ public class WorkerThread implements Runnable {
     private final int NETWORK_MSG_DIRECTORY_TIME_GET = 10;
     private final int NETWORK_MSG_DIRECTORY_TIME_ACK = 11;
     private final int NETWORK_MSG_DIRECTORY_TIME_SET = 12;
+    private final int NETWORK_MSG_FILE_PUT_START_NACK = 13;
+
+    // Hash-map storages
+    private final String HASHMAP_STORE_FILES = ".file_info";
+    private final String HASHMAP_STORE_DIRECTORIES = ".directory_info";
 
     // File download context
     private FileOutputStream fo = null;
+    private String currentFile = null;
+    private long currentFile_ts = 0;
+    private HashMap<String,String> file_info = null;
+    private HashMap<String,String> directory_info = null;
 
     public WorkerThread(Socket s) {
         sock = s;
+        file_info = load_hashmap(HASHMAP_STORE_FILES);
+        directory_info = load_hashmap(HASHMAP_STORE_DIRECTORIES);
+    }
+
+
+    private HashMap<String,String> load_hashmap(String path) {
+        try
+        {
+            ObjectInputStream ois = new ObjectInputStream(new FileInputStream(path));
+            Object result = ois.readObject();
+            ois.close();
+            return (HashMap<String, String>)result;
+        }
+        catch(Exception e)
+        {
+            // May be hash not created yet.
+            System.out.println("Could not find hashmap file " + path + ". Creating new hash");
+            HashMap<String, String> hash = new HashMap<>();
+            return hash;
+        }
+    }
+
+    private void update_hashmap(HashMap<String, String> hash, String path) {
+        try {
+            FileOutputStream fout = new FileOutputStream(path);
+            ObjectOutputStream oos = new ObjectOutputStream(fout);
+            oos.writeObject(hash);
+            oos.close();
+            System.out.println("Hashmap updated to " + path);
+        } catch (Exception e) {
+            System.out.println("Updating hashmap to file " + path + " Failed");
+            System.out.println(e.getMessage() + " " + e.getLocalizedMessage());
+        }
     }
 
 
@@ -53,8 +97,23 @@ public class WorkerThread implements Runnable {
                 }
             }
 
-            String str = new String(payload);
-            String target = Paths.get(str).getFileName().toString();
+            bb = ByteBuffer.wrap(payload);
+            currentFile_ts = bb.getLong();
+            byte[] file = new byte[payload_len - 8];
+            bb.get(file);
+            currentFile = new String(file);
+            bb = ByteBuffer.wrap(response);
+
+            // Check if file already exists
+            String stored_ts = file_info.get(currentFile);
+            if (stored_ts != null && Long.valueOf(stored_ts) == currentFile_ts) {
+                // File already exists
+                System.out.println("File " + currentFile + " already exists");
+                bb.putInt(NETWORK_MSG_FILE_PUT_START_NACK);
+                bb.putInt(0);
+                return response;
+            }
+            String target = Paths.get(currentFile).getFileName().toString();
             System.out.println("Request received to download file: " + target);
             File fp = new File(target);
             try {
@@ -107,6 +166,10 @@ public class WorkerThread implements Runnable {
                 return null;
             }
 
+            String file_ts = Long.toString(currentFile_ts);
+            file_info.put(currentFile, file_ts);
+            update_hashmap(file_info, HASHMAP_STORE_FILES);
+
             System.out.println("File download complete...");
             bb.putInt(NETWORK_MSG_FILE_PUT_END_ACK);
             bb.putInt(0);
@@ -128,13 +191,18 @@ public class WorkerThread implements Runnable {
             bb.get(file_name, 0, file_len);
             String str = new String(file_name);
 
-            // Return value '2' for now
+            String file_ts = directory_info.get(str);
+            long ts = 0;
+            if (file_ts != null) {
+                ts = Long.valueOf(file_ts);
+            }
+            System.out.println("Read timestamp " + ts + " for directory " + str);
+
             byte[] rsp = new byte[16];
             bb = ByteBuffer.wrap(rsp);
             bb.putInt(NETWORK_MSG_DIRECTORY_TIME_ACK);
             bb.putInt(8);
-            bb.putLong(2);
-            System.out.println("Got Network_MSG_DIRECTORY_TIME_GET for " + str);
+            bb.putLong(ts);
             return rsp;
         }
 
@@ -145,7 +213,13 @@ public class WorkerThread implements Runnable {
             byte[] file_name = new byte[file_len];
             bb.get(file_name, 0, file_len);
             String str = new String(file_name);
-            System.out.println("Got Network_MSG_DIRECTORY_TIME_SET for " + str);
+
+
+            String file_ts = Long.toString(bb.getLong());
+
+            directory_info.put(str, file_ts);
+            update_hashmap(directory_info, HASHMAP_STORE_DIRECTORIES);
+            System.out.println("Set timestamp " + file_ts + " for directory " + str);
 
             bb = ByteBuffer.wrap(response);
             bb.putInt(NETWORK_MSG_DIRECTORY_TIME_ACK);
