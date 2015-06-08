@@ -10,9 +10,7 @@ import java.nio.file.Paths;
 public class MainProgram {
 
     public static void main(String[] args) {
-        //Path p = Paths.get("/sdcard/hello/how/are/you.jpg");
-        //System.out.println("Got path " + p.getFileName().toString() + ".");
-        System.setProperty("java.net.preferIPv4Stack", "true");  // else JmDNS picks ipv6 interface as default
+        //System.setProperty("java.net.preferIPv4Stack", "true");  // Moved to VM options in Program configuration
         ShareServer s = new ShareServer();
     }
 }

@@ -7,7 +7,9 @@ import java.io.*;
 import java.net.Socket;
 import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 
 /**
  * Created by maniksin on 5/30/15.
@@ -41,18 +43,20 @@ public class WorkerThread implements Runnable,Serializable {
     private long currentFile_ts = 0;
     private HashMap<String,String> file_info = null;
     private HashMap<String,String> directory_info = null;
+    private String mAndroidId = null;
 
     public WorkerThread(Socket s) {
         sock = s;
-        file_info = load_hashmap(HASHMAP_STORE_FILES);
-        directory_info = load_hashmap(HASHMAP_STORE_DIRECTORIES);
+        //file_info = load_hashmap(HASHMAP_STORE_FILES);
+        //directory_info = load_hashmap(HASHMAP_STORE_DIRECTORIES);
     }
 
 
     private HashMap<String,String> load_hashmap(String path) {
+        String full_path = mAndroidId + "/" + path;
         try
         {
-            ObjectInputStream ois = new ObjectInputStream(new FileInputStream(path));
+            ObjectInputStream ois = new ObjectInputStream(new FileInputStream(full_path));
             Object result = ois.readObject();
             ois.close();
             return (HashMap<String, String>)result;
@@ -67,14 +71,15 @@ public class WorkerThread implements Runnable,Serializable {
     }
 
     private void update_hashmap(HashMap<String, String> hash, String path) {
+        String full_path = mAndroidId + "/" + path;
         try {
-            FileOutputStream fout = new FileOutputStream(path);
+            FileOutputStream fout = new FileOutputStream(full_path);
             ObjectOutputStream oos = new ObjectOutputStream(fout);
             oos.writeObject(hash);
             oos.close();
-            System.out.println("Hashmap updated to " + path);
+            System.out.println("Hashmap updated to " + full_path);
         } catch (Exception e) {
-            System.out.println("Updating hashmap to file " + path + " Failed");
+            System.out.println("Updating hashmap to file " + full_path + " Failed");
             System.out.println(e.getMessage() + " " + e.getLocalizedMessage());
         }
     }
@@ -97,12 +102,37 @@ public class WorkerThread implements Runnable,Serializable {
                 }
             }
 
+             /*
+                * NETWORK_MSG_FILE_PUT_START
+                * 4 byte msg-id
+                * 4 byte payload-len
+                * 8 byte file last modified time
+                * 4 byte file length
+                * <file-name>
+                * 4 byte android-id.length
+                * <android-id string>
+                 */
             bb = ByteBuffer.wrap(payload);
             currentFile_ts = bb.getLong();
-            byte[] file = new byte[payload_len - 8];
+            int file_len = bb.getInt();
+            byte[] file = new byte[file_len];
             bb.get(file);
+            int android_id_len = bb.getInt();
+            byte[] android_id = new byte[android_id_len];
+            bb.get(android_id);
+
+            mAndroidId = new String(android_id);
             currentFile = new String(file);
+
             bb = ByteBuffer.wrap(response);
+
+            File device = new File(mAndroidId);
+            if (device == null || !device.isDirectory()) {
+                // Create it
+                device.mkdir();
+            }
+            file_info = load_hashmap(HASHMAP_STORE_FILES);
+
 
             // Check if file already exists
             String stored_ts = file_info.get(currentFile);
@@ -113,7 +143,7 @@ public class WorkerThread implements Runnable,Serializable {
                 bb.putInt(0);
                 return response;
             }
-            String target = Paths.get(currentFile).getFileName().toString();
+            String target = mAndroidId + "/" + Paths.get(currentFile).getFileName().toString();
             System.out.println("Request received to download file: " + target);
             File fp = new File(target);
             try {
@@ -189,7 +219,19 @@ public class WorkerThread implements Runnable,Serializable {
             int file_len = bb.getInt();
             byte[] file_name = new byte[file_len];
             bb.get(file_name, 0, file_len);
+            int android_id_len = bb.getInt();
+            byte[] android_id = new byte[android_id_len];
+            bb.get(android_id);
+
+            mAndroidId = new String(android_id);
             String str = new String(file_name);
+
+            File device = new File(mAndroidId);
+            if (device == null || !device.isDirectory()) {
+                // Create it
+                device.mkdir();
+            }
+            directory_info = load_hashmap(HASHMAP_STORE_DIRECTORIES);
 
             String file_ts = directory_info.get(str);
             long ts = 0;
@@ -208,18 +250,65 @@ public class WorkerThread implements Runnable,Serializable {
 
         if (msg_id == NETWORK_MSG_DIRECTORY_TIME_SET) {
 
+             /*
+                * Directory sync message:
+                * 4 byte msg-id
+                * 4 byte payload-len
+                * 4 byte directory-string length
+                * <directory-string>
+                * 8 byte modified time
+                * 4 byte android_id.length
+                * <android-id>
+                 */
             bb = ByteBuffer.wrap(payload);
             int file_len = bb.getInt();
             byte[] file_name = new byte[file_len];
             bb.get(file_name, 0, file_len);
+            String dir_ts = Long.toString(bb.getLong());
+            int android_id_len = bb.getInt();
+            byte[] android_id = new byte[android_id_len];
+            bb.get(android_id);
+
+            mAndroidId = new String(android_id);
             String str = new String(file_name);
 
+            File device = new File(mAndroidId);
+            if (device == null || !device.isDirectory()) {
+                // Create it
+                device.mkdir();
+            }
+            directory_info = load_hashmap(HASHMAP_STORE_DIRECTORIES);
+            file_info = load_hashmap(HASHMAP_STORE_FILES);
 
-            String file_ts = Long.toString(bb.getLong());
 
-            directory_info.put(str, file_ts);
+
+
+            directory_info.put(str, dir_ts);
+
+            // We can remove all files from file_info hashmap which have lesser ts than the
+            // directory ts, as the peer is not going to ask for checking those files.
+            List<String> files_to_remove = new ArrayList<String>();
+            for (String key: file_info.keySet()) {
+                if (key.contains(str)) {
+                    // File name has the directory name
+                    String file_ts = file_info.get(key);
+                    if (Long.valueOf(file_ts) < Long.valueOf(dir_ts)) {
+                        files_to_remove.add(key);
+                    }
+                }
+
+            }
+
+            while (!files_to_remove.isEmpty()) {
+                String file = files_to_remove.remove(0);
+                System.out.println("Removing " + file + " from hashmap on directory timestamp update");
+                file_info.remove(file);
+            }
+
             update_hashmap(directory_info, HASHMAP_STORE_DIRECTORIES);
-            System.out.println("Set timestamp " + file_ts + " for directory " + str);
+            update_hashmap(file_info, HASHMAP_STORE_FILES);
+
+            System.out.println("Set timestamp " + dir_ts + " for directory " + str);
 
             bb = ByteBuffer.wrap(response);
             bb.putInt(NETWORK_MSG_DIRECTORY_TIME_ACK);
