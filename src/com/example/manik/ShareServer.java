@@ -12,7 +12,7 @@ import java.net.Socket;
  */
 public class ShareServer {
     private ServerSocket mainSock;
-    private int serverPort = 32001;   // should be 0 when discovery is enabled
+    private int serverPort = 32002;   // should be 0 when discovery is enabled
     private JmDNS jmdns;
 
     private final String JMDNS_SERVICE_TYPE = "_share._tcp.local.";
